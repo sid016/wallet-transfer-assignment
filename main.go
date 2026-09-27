@@ -17,8 +17,10 @@ import (
 )
 
 func main() {
-	if err := config.LoadEnvFile("test-local.env"); err != nil {
-		log.Fatalf("load test-local.env: %v", err)
+	if envFile := os.Getenv("ENV_FILE"); envFile != "" {
+		if err := config.LoadEnvFile(envFile); err != nil {
+			log.Fatalf("load %s: %v", envFile, err)
+		}
 	}
 	databaseURL := flag.String("db-url", firstNonEmpty(os.Getenv("DATABASE_URL"), os.Getenv("DB_URL")), "PostgreSQL URL (overrides individual DB settings)")
 	databaseHost := flag.String("db-host", os.Getenv("DB_HOST"), "PostgreSQL host")
@@ -26,7 +28,7 @@ func main() {
 	databaseUser := flag.String("db-user", os.Getenv("DB_USER"), "PostgreSQL user")
 	databasePassword := flag.String("db-password", os.Getenv("DB_PASSWORD"), "PostgreSQL password")
 	databaseName := flag.String("db-name", os.Getenv("DB_NAME"), "PostgreSQL database name")
-	databaseSSLMode := flag.String("db-sslmode", os.Getenv("DB_SSLMODE"), "PostgreSQL SSL mode (defaults to disable)")
+	databaseSSLMode := flag.String("db-sslmode", os.Getenv("DB_SSL_MODE"), "PostgreSQL SSL mode (defaults to disable)")
 	port := flag.String("port", envOr("PORT", "8080"), "HTTP listen port")
 	flag.Parse()
 	resolvedDatabaseURL, err := config.DatabaseURL(*databaseURL, *databaseHost, *databasePort, *databaseUser, *databasePassword, *databaseName, *databaseSSLMode)

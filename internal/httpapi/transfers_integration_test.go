@@ -23,16 +23,18 @@ import (
 )
 
 func TestTransferAPI_Postgres(t *testing.T) {
-	if err := config.LoadEnvFile("../../test-local.env"); err != nil {
-		t.Fatal(err)
+	if envFile := os.Getenv("TEST_ENV_FILE"); envFile != "" {
+		if err := config.LoadEnvFile(envFile); err != nil {
+			t.Fatal(err)
+		}
 	}
 	explicitURL := firstNonEmpty(os.Getenv("TEST_DATABASE_URL"), os.Getenv("DB_URL"), os.Getenv("DATABASE_URL"))
-	dsn, err := config.DatabaseURL(explicitURL, os.Getenv("DB_HOST"), os.Getenv("DB_PORT"), os.Getenv("DB_USER"), os.Getenv("DB_PASSWORD"), os.Getenv("DB_NAME"), os.Getenv("DB_SSLMODE"))
+	dsn, err := config.DatabaseURL(explicitURL, os.Getenv("DB_HOST"), os.Getenv("DB_PORT"), os.Getenv("DB_USER"), os.Getenv("DB_PASSWORD"), os.Getenv("DB_NAME"), os.Getenv("DB_SSL_MODE"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dsn == "" {
-		t.Skip("set TEST_DATABASE_URL or DATABASE_URL, or configure DB_HOST, DB_USER, and DB_NAME in test-local.env")
+		t.Skip("set TEST_DATABASE_URL or DATABASE_URL, or configure DB_HOST, DB_USER, and DB_NAME (optionally via TEST_ENV_FILE)")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -81,6 +83,27 @@ func TestTransferAPI_Postgres(t *testing.T) {
 	first := request("key-1", "alice", "bob", 40)
 	if first.Code != http.StatusCreated {
 		t.Fatalf("first transfer status = %d, body=%s", first.Code, first.Body)
+	}
+	var processedTransfer struct {
+		Transfer domain.Transfer `json:"transfer"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &processedTransfer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE transfers SET status='FAILED' WHERE id=$1`, processedTransfer.Transfer.ID); err == nil {
+		t.Fatal("processed transfer was allowed to transition to FAILED")
+	}
+	var persistedStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM transfers WHERE id=$1`, processedTransfer.Transfer.ID).Scan(&persistedStatus); err != nil {
+		t.Fatal(err)
+	}
+	if persistedStatus != "PROCESSED" {
+		t.Fatalf("transfer status after rejected transition = %q, want PROCESSED", persistedStatus)
+	}
+	missingWallet := request("key-missing-wallet", "missing", "bob", 1)
+	var missingWalletResponse errorResponse
+	if missingWallet.Code != http.StatusNotFound || json.Unmarshal(missingWallet.Body.Bytes(), &missingWalletResponse) != nil || missingWalletResponse.Error.Code != ErrCodeWalletNotFound {
+		t.Fatalf("missing wallet response = (%d, %s), want 404 wallet_not_found", missingWallet.Code, missingWallet.Body)
 	}
 	replay := request("key-1", "alice", "bob", 40)
 	if replay.Code != first.Code || replay.Body.String() != first.Body.String() {

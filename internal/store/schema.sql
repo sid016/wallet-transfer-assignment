@@ -40,6 +40,24 @@ CREATE INDEX IF NOT EXISTS ledger_entries_wallet_created_idx
     ON ledger_entries (wallet_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS transfers_created_idx ON transfers (created_at DESC);
 
+CREATE OR REPLACE FUNCTION enforce_transfer_status_transition() RETURNS trigger AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.status <> 'PENDING' THEN
+            RAISE EXCEPTION 'transfers must be created in PENDING state';
+        END IF;
+    ELSIF NEW.status <> OLD.status AND (OLD.status <> 'PENDING' OR NEW.status NOT IN ('PROCESSED', 'FAILED')) THEN
+        RAISE EXCEPTION 'invalid transfer status transition: % -> %', OLD.status, NEW.status;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS transfers_status_transition ON transfers;
+CREATE TRIGGER transfers_status_transition
+    BEFORE INSERT OR UPDATE OF status ON transfers
+    FOR EACH ROW EXECUTE FUNCTION enforce_transfer_status_transition();
+
 CREATE OR REPLACE FUNCTION assert_transfer_ledger_balanced() RETURNS trigger AS $$
 DECLARE
     checked_transfer_id UUID;

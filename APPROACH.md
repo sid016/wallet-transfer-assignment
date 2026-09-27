@@ -51,7 +51,7 @@ Insufficient-funds responses are persisted as terminal failures. Retrying the sa
 
 Client errors use a stable JSON error object with a code and message. Unexpected persistence errors roll back and return a generic `500`; details go to the server logger rather than the response. Echo request logging, request IDs, and recovery middleware provide basic operational visibility.
 
-The server accepts either a PostgreSQL connection URL or individual host, port, user, password, database, and SSL mode settings. CLI flags override environment-derived defaults. A local `test-local.env` file is loaded for development and is ignored by Git. The default SSL mode is `disable` for local development; deployments using remote PostgreSQL should choose an appropriate secure mode.
+The server accepts either a PostgreSQL connection URL or individual host, port, user, password, database, and `DB_SSL_MODE` settings. CLI flags override environment-derived defaults. Local env files are loaded only when explicitly selected with `ENV_FILE`; the integration test likewise loads a file only when `TEST_ENV_FILE` is set. Copy `test-local.env.example` to `test-local.env` for local use. The default SSL mode is `disable` for local development; deployments using remote PostgreSQL should choose an appropriate secure mode.
 
 ## Testing approach
 
@@ -62,7 +62,7 @@ The server accepts either a PostgreSQL connection URL or individual host, port, 
 - insufficient funds and replay of the terminal failure;
 - concurrent debits that must not overspend.
 
-Set `TEST_DATABASE_URL` or `DATABASE_URL`, or provide the individual `DB_*` values in `test-local.env`, to run the integration test. The test account needs permission to create and drop schemas. Without database settings, the integration test skips.
+Set `TEST_DATABASE_URL` or `DATABASE_URL`, or provide the individual `DB_*` values in the environment, to run the integration test. To load a local file, set `TEST_ENV_FILE=../../test-local.env` when running the package test. The test account needs permission to create and drop schemas. Without database settings, the integration test skips.
 
 ## Tradeoffs and next steps
 

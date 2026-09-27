@@ -13,6 +13,14 @@ type Handler struct{ transfers *service.Transfers }
 
 func NewHandler(transfers *service.Transfers) *Handler { return &Handler{transfers: transfers} }
 
+const (
+	// Error codes returned in JSON responses
+	ErrCodeInvalidRequest      = "invalid_request"
+	ErrCodeIdempotencyConflict = "idempotency_conflict"
+	ErrCodeWalletNotFound      = "wallet_not_found"
+	ErrCodeInternalError       = "internal_error"
+)
+
 func (h *Handler) Register(e *echo.Echo) {
 	e.POST("/transfers", h.createTransfer)
 	e.GET("/wallets/:id", h.getWallet)
@@ -39,14 +47,14 @@ func (h *Handler) createTransfer(c echo.Context) error {
 	if err != nil {
 		switch {
 		case errors.Is(err, domain.ErrInvalidRequest):
-			return writeError(c, http.StatusBadRequest, "invalid_request", "provide a key, distinct wallet IDs, and a positive integer amount")
+			return writeError(c, http.StatusBadRequest, ErrCodeInvalidRequest, "provide a key, distinct wallet IDs, and a positive integer amount")
 		case errors.Is(err, domain.ErrIdempotencyConflict):
-			return writeError(c, http.StatusConflict, "idempotency_conflict", "idempotency key was already used for a different request")
+			return writeError(c, http.StatusConflict, ErrCodeIdempotencyConflict, "idempotency key was already used for a different request")
 		case errors.Is(err, domain.ErrWalletNotFound):
-			return writeError(c, http.StatusNotFound, err.Error(), "one or both of the specified wallets do not exist")
+			return writeError(c, http.StatusNotFound, ErrCodeWalletNotFound, "one or both of the specified wallets do not exist")
 		default:
 			c.Logger().Errorf("create transfer failed: %v", err)
-			return writeError(c, http.StatusInternalServerError, "internal_error", "transfer could not be completed")
+			return writeError(c, http.StatusInternalServerError, ErrCodeInternalError, "transfer could not be completed")
 		}
 	}
 	return c.JSONPretty(result.HTTPStatus, result, "  ")
@@ -56,13 +64,13 @@ func (h *Handler) getWallet(c echo.Context) error {
 	wallet, err := h.transfers.Wallet(c.Request().Context(), c.Param("id"))
 	if err != nil {
 		if errors.Is(err, domain.ErrWalletNotFound) {
-			return writeError(c, http.StatusNotFound, err.Error(), "wallet does not exist")
+			return writeError(c, http.StatusNotFound, ErrCodeWalletNotFound, "wallet does not exist")
 		}
 		if errors.Is(err, domain.ErrInvalidRequest) {
-			return writeError(c, http.StatusBadRequest, "invalid_request", "wallet ID is required")
+			return writeError(c, http.StatusBadRequest, ErrCodeInvalidRequest, "wallet ID is required")
 		}
 		c.Logger().Errorf("get wallet failed: %v", err)
-		return writeError(c, http.StatusInternalServerError, "internal_error", "wallet could not be loaded")
+		return writeError(c, http.StatusInternalServerError, ErrCodeInternalError, "wallet could not be loaded")
 	}
 	return c.JSONPretty(http.StatusOK, wallet, "  ")
 }
