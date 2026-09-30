@@ -100,6 +100,59 @@ func TestTransferAPI_Postgres(t *testing.T) {
 	if persistedStatus != "PROCESSED" {
 		t.Fatalf("transfer status after rejected transition = %q, want PROCESSED", persistedStatus)
 	}
+	for _, mutation := range []struct {
+		field string
+		query string
+	}{
+		{field: "from_wallet_id", query: `UPDATE transfers SET from_wallet_id='carol' WHERE id=$1`},
+		{field: "to_wallet_id", query: `UPDATE transfers SET to_wallet_id='carol' WHERE id=$1`},
+		{field: "amount", query: `UPDATE transfers SET amount=39 WHERE id=$1`},
+	} {
+		if _, err := pool.Exec(ctx, mutation.query, processedTransfer.Transfer.ID); err == nil {
+			t.Errorf("processed transfer allowed update of %s", mutation.field)
+		}
+	}
+	var fromWalletID, toWalletID string
+	var persistedAmount int64
+	if err := pool.QueryRow(ctx, `SELECT from_wallet_id, to_wallet_id, amount FROM transfers WHERE id=$1`, processedTransfer.Transfer.ID).Scan(&fromWalletID, &toWalletID, &persistedAmount); err != nil {
+		t.Fatal(err)
+	}
+	if fromWalletID != "alice" || toWalletID != "bob" || persistedAmount != 40 {
+		t.Fatalf("transfer fields after rejected updates = (%q, %q, %d), want (alice, bob, 40)", fromWalletID, toWalletID, persistedAmount)
+	}
+	for _, scenario := range []struct {
+		name         string
+		debitWallet  string
+		creditWallet string
+		debitAmount  int64
+		creditAmount int64
+	}{
+		{name: "amount mismatch", debitWallet: "alice", creditWallet: "bob", debitAmount: 39, creditAmount: 39},
+		{name: "debit wallet mismatch", debitWallet: "carol", creditWallet: "bob", debitAmount: 40, creditAmount: 40},
+		{name: "credit wallet mismatch", debitWallet: "alice", creditWallet: "carol", debitAmount: 40, creditAmount: 40},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(ctx)
+
+			id := uuid.New()
+			if _, err := tx.Exec(ctx, `INSERT INTO transfers (id, from_wallet_id, to_wallet_id, amount, status) VALUES ($1, 'alice', 'bob', 40, 'PENDING')`, id); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO ledger_entries (wallet_id, transfer_id, type, amount) VALUES ($1, $2, 'DEBIT', $3), ($4, $2, 'CREDIT', $5)`, scenario.debitWallet, id, scenario.debitAmount, scenario.creditWallet, scenario.creditAmount); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, `UPDATE transfers SET status = 'PROCESSED' WHERE id = $1`, id); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(ctx); err == nil {
+				t.Errorf("malformed ledger was allowed to commit")
+			}
+		})
+	}
 	missingWallet := request("key-missing-wallet", "missing", "bob", 1)
 	var missingWalletResponse errorResponse
 	if missingWallet.Code != http.StatusNotFound || json.Unmarshal(missingWallet.Body.Bytes(), &missingWalletResponse) != nil || missingWalletResponse.Error.Code != ErrCodeWalletNotFound {

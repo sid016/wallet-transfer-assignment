@@ -46,6 +46,10 @@ BEGIN
         IF NEW.status <> 'PENDING' THEN
             RAISE EXCEPTION 'transfers must be created in PENDING state';
         END IF;
+    ELSIF NEW.from_wallet_id IS DISTINCT FROM OLD.from_wallet_id
+       OR NEW.to_wallet_id IS DISTINCT FROM OLD.to_wallet_id
+       OR NEW.amount IS DISTINCT FROM OLD.amount THEN
+        RAISE EXCEPTION 'transfer business fields are immutable';
     ELSIF NEW.status <> OLD.status AND (OLD.status <> 'PENDING' OR NEW.status NOT IN ('PROCESSED', 'FAILED')) THEN
         RAISE EXCEPTION 'invalid transfer status transition: % -> %', OLD.status, NEW.status;
     END IF;
@@ -55,16 +59,21 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS transfers_status_transition ON transfers;
 CREATE TRIGGER transfers_status_transition
-    BEFORE INSERT OR UPDATE OF status ON transfers
+    BEFORE INSERT OR UPDATE OF status, from_wallet_id, to_wallet_id, amount ON transfers
     FOR EACH ROW EXECUTE FUNCTION enforce_transfer_status_transition();
 
 CREATE OR REPLACE FUNCTION assert_transfer_ledger_balanced() RETURNS trigger AS $$
 DECLARE
     checked_transfer_id UUID;
     transfer_status TEXT;
+    transfer_amount BIGINT;
+    transfer_from_wallet_id TEXT;
+    transfer_to_wallet_id TEXT;
     entry_count BIGINT;
     debit_total BIGINT;
     credit_total BIGINT;
+    valid_debit_count BIGINT;
+    valid_credit_count BIGINT;
 BEGIN
     IF TG_TABLE_NAME = 'transfers' THEN
         checked_transfer_id := NEW.id;
@@ -74,7 +83,9 @@ BEGIN
         checked_transfer_id := NEW.transfer_id;
     END IF;
 
-    SELECT status INTO transfer_status FROM transfers WHERE id = checked_transfer_id;
+        SELECT status, amount, from_wallet_id, to_wallet_id
+            INTO transfer_status, transfer_amount, transfer_from_wallet_id, transfer_to_wallet_id
+            FROM transfers WHERE id = checked_transfer_id;
     IF NOT FOUND THEN
         RETURN NULL;
     END IF;
@@ -87,11 +98,25 @@ BEGIN
 
     SELECT COUNT(*),
            COALESCE(SUM(amount) FILTER (WHERE type = 'DEBIT'), 0),
-           COALESCE(SUM(amount) FILTER (WHERE type = 'CREDIT'), 0)
-      INTO entry_count, debit_total, credit_total
+                     COALESCE(SUM(amount) FILTER (WHERE type = 'CREDIT'), 0),
+                     COUNT(*) FILTER (
+                             WHERE type = 'DEBIT'
+                                 AND wallet_id = transfer_from_wallet_id
+                                 AND amount = transfer_amount
+                     ),
+                     COUNT(*) FILTER (
+                             WHERE type = 'CREDIT'
+                                 AND wallet_id = transfer_to_wallet_id
+                                 AND amount = transfer_amount
+                     )
+            INTO entry_count, debit_total, credit_total, valid_debit_count, valid_credit_count
       FROM ledger_entries WHERE transfer_id = checked_transfer_id;
-    IF entry_count <> 2 OR debit_total <> credit_total THEN
-        RAISE EXCEPTION 'transfer % must have one balanced debit and credit', checked_transfer_id;
+        IF entry_count <> 2
+             OR debit_total <> transfer_amount
+             OR credit_total <> transfer_amount
+             OR valid_debit_count <> 1
+             OR valid_credit_count <> 1 THEN
+                RAISE EXCEPTION 'transfer % must have one debit and credit matching its amount and wallets', checked_transfer_id;
     END IF;
     RETURN NULL;
 END;

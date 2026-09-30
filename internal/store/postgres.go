@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -75,31 +76,16 @@ func (p *Postgres) CreateTransfer(ctx context.Context, request domain.TransferRe
 		return result, nil
 	}
 
-	rows, err := tx.Query(ctx, `SELECT id FROM wallets WHERE id = $1 OR id = $2 ORDER BY id FOR UPDATE`, request.FromWalletID, request.ToWalletID)
-	if err != nil {
-		return domain.TransferResult{}, err
-	}
-	count := 0
-	idMap := make(map[string]bool)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
+	walletIDs := []string{request.FromWalletID, request.ToWalletID}
+	sort.Strings(walletIDs)
+	for _, walletID := range walletIDs {
+		var lockedID string
+		err := tx.QueryRow(ctx, `SELECT id FROM wallets WHERE id = $1 FOR UPDATE`, walletID).Scan(&lockedID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.TransferResult{}, fmt.Errorf("wallet with id '%s' does not exist, err: %w", walletID, domain.ErrWalletNotFound)
+		}
+		if err != nil {
 			return domain.TransferResult{}, err
-		}
-		idMap[id] = true
-		count++
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return domain.TransferResult{}, err
-	}
-	if count != 2 {
-		if !idMap[request.FromWalletID] {
-			return domain.TransferResult{}, fmt.Errorf("wallet with id '%s' does not exist, err: %w", request.FromWalletID, domain.ErrWalletNotFound)
-		}
-		if !idMap[request.ToWalletID] {
-			return domain.TransferResult{}, fmt.Errorf("wallet with id '%s' does not exist, err: %w", request.ToWalletID, domain.ErrWalletNotFound)
 		}
 	}
 
